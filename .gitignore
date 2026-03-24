@@ -1,0 +1,16 @@
+# 忽略虚拟环境和系统文件
+.venv/
+__pycache__/
+.idea/
+snapshots/
+middle_collect/
+# 忽略模型权重文件（千万不要上传这个，否则会报错）
+**/output/hpc_coder_opt_merge/
+**/output/hpc_coder_opt_v2_sft/
+
+# 如果数据集 jsonl 文件很大（超过 50MB），建议也忽略
+# *.jsonl
+# *.json
+
+# 明确允许 img 文件夹上传
+!img/

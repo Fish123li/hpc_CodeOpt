@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HPC 智能代码优化系统</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+
+    <style>
+        body { background-color: #0f172a; color: #cbd5e1; font-family: "Microsoft YaHei", sans-serif; height: 100vh; overflow: hidden; }
+        .glass { background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+        .editor-container { flex: 1; min-height: 0; border: 1px solid #334155; }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="app" class="h-full flex flex-col">
+        <header class="bg-slate-900 border-b border-slate-700 p-4 flex justify-between items-center shadow-lg shrink-0">
+            <div class="flex items-center gap-3">
+                <i class="ph ph-cpu text-3xl text-blue-500"></i>
+                <div>
+                    <h1 class="text-xl font-bold text-white tracking-wide">HPC 智能优化平台 <span class="text-xs bg-blue-600 px-2 py-0.5 rounded ml-2">v4.0 XML-Strict</span></h1>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-sm bg-slate-800 px-3 py-1.5 rounded-full border border-slate-600">
+                    <div :class="`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`"></div>
+                    {{ connected ? '模型已连接' : '模型断开' }}
+                </div>
+                <button @click="connectModel" class="text-slate-400 hover:text-white transition"><i class="ph ph-arrows-clockwise text-xl"></i></button>
+            </div>
+        </header>
+
+        <main class="flex-1 p-6 flex gap-6 overflow-hidden min-h-0">
+            <div class="w-1/2 flex flex-col gap-4 h-full">
+                <div class="glass p-3 rounded-t-lg flex justify-between items-center shrink-0">
+                    <span class="font-bold text-blue-400 flex items-center gap-2">
+                        <i class="ph ph-code"></i> {{ mode === 'result' ? '优化后纯代码' : '源代码输入' }}
+                    </span>
+                    <button v-if="mode === 'idle'" @click="loadExample" class="text-xs text-slate-400 hover:text-white underline">加载示例</button>
+                    <div v-if="mode === 'result'" class="flex gap-2">
+                         <button @click="downloadCode" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs flex items-center gap-1 shadow">
+                            <i class="ph ph-download-simple"></i> 下载代码 (.txt)
+                        </button>
+                    </div>
+                </div>
+                <div id="editor-container" class="editor-container rounded bg-slate-900 shadow-inner"></div>
+                <div v-if="mode !== 'result'" class="flex gap-4 relative shrink-0">
+                    <template v-if="!loading">
+                        <button @click="analyzeCode" :disabled="!connected" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-lg font-medium transition flex justify-center items-center gap-2 disabled:opacity-50">
+                            <i class="ph ph-magnifying-glass"></i> 第一步：生成优化建议
+                        </button>
+                        <button @click="autoOptimize" :disabled="!connected" class="flex-1 btn-primary py-3 rounded-lg font-medium shadow-lg shadow-blue-500/20 transition flex justify-center items-center gap-2 disabled:opacity-50">
+                            <i class="ph ph-lightning"></i> 自动全量优化
+                        </button>
+                    </template>
+                    <button v-else @click="stopGeneration" class="w-full btn-danger py-3 rounded-lg font-medium shadow-lg transition flex justify-center items-center gap-2 animate-pulse">
+                        <i class="ph ph-stop-circle text-xl"></i> 停止生成 (Stop)
+                    </button>
+                </div>
+            </div>
+
+            <div class="w-1/2 flex flex-col gap-4 h-full relative">
+                <div v-if="loading" class="absolute inset-0 z-20 glass flex flex-col items-center justify-center rounded-lg backdrop-blur-md">
+                    <div class="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p class="text-blue-300 text-lg font-bold">{{ loadingText }}</p>
+                    <p class="text-sm text-slate-400 mt-2">正在执行严格指令...</p>
+                </div>
+
+                <div v-if="mode === 'suggestions'" class="h-full glass rounded-lg p-6 flex flex-col animate-fade-in overflow-hidden">
+                    <h2 class="text-xl font-bold text-white mb-2 flex items-center gap-2 shrink-0">
+                        <i class="ph ph-lightbulb text-yellow-500"></i> 第二步：选择策略
+                    </h2>
+                    <p class="text-sm text-slate-400 mb-4 border-b border-slate-700 pb-2 shrink-0">模型已分离出纯净建议，请勾选（已过滤非技术内容）：</p>
+                    <div class="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar min-h-0">
+                        <div v-for="(item, idx) in suggestions" :key="idx" class="p-4 rounded-lg bg-slate-800/40 border border-slate-700/50 hover:bg-slate-800 transition group">
+                            <label class="flex items-center gap-3 cursor-pointer select-none">
+                                <input type="checkbox" v-model="selectedItems" :value="item.title" class="w-5 h-5 rounded border-slate-600 bg-slate-700 text-blue-600">
+                                <span class="font-bold text-slate-100 text-lg group-hover:text-blue-400">{{ item.title }}</span>
+                            </label>
+                            <div class="mt-2 ml-8 text-sm text-slate-400 leading-relaxed border-l-2 border-slate-700 pl-3">
+                                {{ item.desc }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex justify-end gap-3 pt-4 border-t border-slate-700 shrink-0">
+                        <button @click="reset" class="px-5 py-2 text-slate-400 hover:text-white transition">取消</button>
+                        <button @click="optimizeSelected" :disabled="selectedItems.length === 0" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition font-medium shadow-lg">
+                            生成最终代码 ({{ selectedItems.length }})
+                        </button>
+                    </div>
+                </div>
+
+                <div v-else-if="mode === 'result'" class="h-full glass rounded-lg flex flex-col animate-fade-in overflow-hidden">
+                    <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 shrink-0">
+                        <div class="flex items-center gap-3">
+                            <span class="font-bold text-green-400 text-lg">优化分析报告</span>
+                            <span class="text-xs px-2 py-0.5 rounded bg-blue-900 text-blue-300 border border-blue-500/30">{{ domain }}</span>
+                            <span class="text-xs text-slate-500">{{ timeUsed.toFixed(2) }}s</span>
+                        </div>
+                        <button @click="downloadReport" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded text-xs flex items-center gap-1 border border-slate-500 transition">
+                            <i class="ph ph-file-text"></i> 下载分析报告 (.txt)
+                        </button>
+                    </div>
+                    <div class="flex-1 p-6 overflow-y-auto custom-scrollbar text-slate-300 leading-relaxed whitespace-pre-wrap font-sans text-sm">
+                        {{ reportSummary }}
+                    </div>
+                    <div class="p-4 border-t border-slate-700 shrink-0">
+                        <button @click="reset" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition text-sm">
+                            返回首页
+                        </button>
+                    </div>
+                </div>
+
+                <div v-else class="h-full glass rounded-lg flex flex-col items-center justify-center text-slate-500">
+                    <i class="ph ph-code text-6xl mb-4 opacity-20"></i>
+                    <p class="font-medium">请在左侧输入代码开始任务</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, nextTick } = Vue;
+        createApp({
+            setup() {
+                const connected = ref(false);
+                const loading = ref(false);
+                const loadingText = ref('');
+                const mode = ref('idle'); 
+                const suggestions = ref([]);
+                const selectedItems = ref([]);
+                const originalCode = ref('');
+                const optimizedCode = ref('');
+                const reportSummary = ref('');
+                const domain = ref('');
+                const timeUsed = ref(0);
+                let editor;
+                let abortController = null;
+
+                const initEditor = () => {
+                    require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' }});
+                    require(['vs/editor/editor.main'], function() {
+                        editor = monaco.editor.create(document.getElementById('editor-container'), {
+                            value: '#include <stdio.h>\n// Paste Code Here...',
+                            language: 'cpp', theme: 'vs-dark', automaticLayout: true, minimap: { enabled: false }
+                        });
+                    });
+                };
+
+                const connectModel = async () => {
+                    try {
+                        const res = await fetch('/api/status');
+                        const data = await res.json();
+                        connected.value = data.status === 'connected';
+                    } catch (e) { connected.value = false; }
+                };
+
+                const stopGeneration = () => {
+                    if (abortController) { abortController.abort(); abortController = null; }
+                    loading.value = false; alert("已停止生成。");
+                };
+
+                const callApi = async (apiMode, selections = []) => {
+                    loading.value = true;
+                    loadingText.value = apiMode === 'analyze' ? '正在提取纯建议...' : '正在基于建议重写代码...';
+                    abortController = new AbortController();
+                    
+                    if (apiMode !== 'optimize_selected') originalCode.value = editor.getValue();
+
+                    try {
+                        const res = await fetch('/api/process', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                code: originalCode.value,
+                                mode: apiMode,
+                                selected_suggestions: selections
+                            }),
+                            signal: abortController.signal
+                        });
+                        if (!res.ok) throw new Error("服务器错误");
+                        return await res.json();
+                    } catch (e) {
+                        if (e.name !== 'AbortError') alert("错误: " + e.message);
+                        return null;
+                    } finally {
+                        loading.value = false;
+                        abortController = null;
+                    }
+                };
+
+                const analyzeCode = async () => {
+                    const data = await callApi('analyze');
+                    if (data) {
+                        suggestions.value = data.suggestions;
+                        selectedItems.value = [];
+                        mode.value = 'suggestions';
+                    }
+                };
+
+                const autoOptimize = async () => {
+                    const data = await callApi('optimize_auto');
+                    if (data) showResult(data);
+                };
+
+                const optimizeSelected = async () => {
+                    const data = await callApi('optimize_selected', selectedItems.value);
+                    if (data) showResult(data);
+                };
+
+                const showResult = (data) => {
+                    mode.value = 'result';
+                    optimizedCode.value = data.optimized_code || "// Error: No code generated.";
+                    reportSummary.value = data.report || "暂无文字报告";
+                    domain.value = data.domain;
+                    timeUsed.value = data.execution_time;
+                    if (editor) {
+                        editor.setValue(optimizedCode.value);
+                        editor.updateOptions({ readOnly: true });
+                    }
+                };
+
+                const loadExample = () => {
+                    editor.setValue(`#include <stdio.h>\n#include <stdlib.h>\n\nvoid matrix_mul(double *A, double *B, double *C, int n) {\n    for(int i=0; i<n; i++) {\n        for(int j=0; j<n; j++) {\n            for(int k=0; k<n; k++) {\n                C[i*n + j] += A[i*n + k] * B[k*n + j];\n            }\n        }\n    }\n}`);
+                };
+
+                const reset = () => { 
+                    mode.value = 'idle';
+                    editor.setValue(originalCode.value || "");
+                    editor.updateOptions({ readOnly: false });
+                };
+
+                const downloadFile = (content, filename) => {
+                    const blob = new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = filename; a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                };
+
+                const downloadCode = () => downloadFile(optimizedCode.value, 'optimized_code.txt');
+                
+                const downloadReport = () => {
+                    let strategies = selectedItems.value.length > 0 ? selectedItems.value.join(", ") : "自动/全量优化";
+                    let content = `=== HPC 优化报告 ===\n\n` +
+                                  `[识别领域]: ${domain.value}\n` +
+                                  `[应用策略]: ${strategies}\n` + 
+                                  `[耗时]: ${timeUsed.value.toFixed(2)}s\n\n` +
+                                  `======================\n` +
+                                  `1. 原始代码\n` +
+                                  `======================\n` +
+                                  `${originalCode.value}\n\n` +
+                                  `======================\n` +
+                                  `2. 优化后代码\n` +
+                                  `======================\n` +
+                                  `${optimizedCode.value}\n\n` +
+                                  `======================\n` +
+                                  `3. 优化原理分析\n` +
+                                  `======================\n` +
+                                  `${reportSummary.value}`;
+                    downloadFile(content, 'optimization_report.txt');
+                };
+
+                onMounted(() => {
+                    initEditor();
+                    connectModel();
+                    window.addEventListener('resize', () => { if (editor) editor.layout(); });
+                });
+
+                return {
+                    connected, loading, loadingText, mode,
+                    suggestions, selectedItems, timeUsed, domain, reportSummary,
+                    connectModel, analyzeCode, autoOptimize, optimizeSelected, stopGeneration,
+                    loadExample, reset, downloadCode, downloadReport
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
